@@ -27,21 +27,23 @@ import threading
 
 import requests
 
-from re import compile as _compile
+from re import compile as _re_compile
 from urllib.parse import urlencode as _urlencode
 from selenium import webdriver
 from selenium import common
 
-REGEX_SEARCH_IMAGE = _compile(r'<meta data-vue-meta="true" itemprop="image" content="([^"]+)"/>')
-URL_BASE = 'https://search.bilibili.com/all?'
+REGEX_SEARCH_IMAGE = _re_compile(r'<meta data-vue-meta="true" itemprop="image" content="([^"]+)"/>')
+REGEX_VIDEO_IDENT = _re_compile(r'av\d+')
+
+DICT_HEADERS = {
+    'User-Agent': 'Mozilla/5.0(Macintosh;U;IntelMacOSX10_6_8;en-us)'
+                  'AppleWebKit/534.50(KHTML,likeGecko)Version/5.1Safari/534.50'
+}
+
+STRING_URL_BASE = 'https://search.bilibili.com/all?'
 EVENT_ALL_DONE = threading.Event()
 
-TIME_OUT = 12
-
-
-# class BColors:
-#     ERROR = '\033[31m'
-#     ENDC = '\033[0m'
+INT_TIME_OUT = 12
 
 
 class MyThread(threading.Thread):
@@ -65,26 +67,29 @@ class MyThread(threading.Thread):
         print('[+]Thread %d finished at %s' % (self.ident, time.ctime()))
 
 
-def download(url: str, **kwargs):
+def download(url, params=None, **kwargs):
     if 'timeout' not in kwargs:
-        kwargs['timeout'] = TIME_OUT
+        kwargs['timeout'] = INT_TIME_OUT
+    if 'headers' not in kwargs:
+        kwargs['headers'] = DICT_HEADERS
+    response = None
     try:
-        res = requests.get(url, **kwargs)
-        res.raise_for_status()
-        return res
+        response = requests.get(url, params=params, **kwargs)
+        response.raise_for_status()
     except Exception as err:
-        BColors.perror('[-]Error: %s' % err)
-        return None
+        print('[-]Error: %s' % err)
+    return response
 
 
 class ProcedureDonwloadImage:
-    _timeOutNumberForExit = 3
-    _queueEmptyTimeOut = 7
+    _TimeOutNumberForExit = 3
+    _QueueEmptyTimeOut = 7
+    _ReqFnMapping = dict()
 
-    def __init__(self, download_dir: str, url_queue: queue.Queue):
+    def __init__(self, download_dir, url_queue):
         self._urlQueue = url_queue
         self._rootDir = download_dir
-        self._threadId = threading.get_ident()
+        # self._threadId = threading.get_ident()
 
     def __call__(self):
         self.make_directory()
@@ -92,53 +97,68 @@ class ProcedureDonwloadImage:
         while True:
             # print('[?]id %d' % threading.get_ident(), EVENT_ALL_DONE.is_set(), isTimeOut, self._urlQueue.qsize())
             if EVENT_ALL_DONE.is_set() and self._urlQueue.empty() or \
-                    timeOutCount >= self._timeOutNumberForExit:
+                    timeOutCount >= self._TimeOutNumberForExit:
                 break
 
             try:
-                twiceTuple = self._urlQueue.get(True, self._queueEmptyTimeOut)
-                assert twiceTuple[0] in ('page', 'image')
+                reqTuple = self._urlQueue.get(True, self._QueueEmptyTimeOut)
+                assert reqTuple[0] in self._ReqFnMapping
 
-                print('[+]Get: %s, Remaining count: %d' % (str(twiceTuple), self._urlQueue.qsize()))
+                print('[+]Get: %s, Remaining count: %d' % (str(reqTuple), self._urlQueue.qsize()))
 
-                response = download(twiceTuple[1])
+                response = download(reqTuple[1])
                 if response:
-                    print('[+]Download finished: %s' % twiceTuple[1])
-                    if twiceTuple[0] == 'image':
-                        self.save_file_by_response(twiceTuple[1].split('/')[-1], response)
-                    else:
-                        matchObj = REGEX_SEARCH_IMAGE.search(response.text)
-                        if matchObj:
-                            newTwiceTuple = ('image', matchObj.group(1))
-                            self._urlQueue.put(newTwiceTuple)
-                            print('[+]Put: %s' % str(newTwiceTuple))
-                        else:
-                            print('[-]Image URL not found on page %s' % twiceTuple[1])
+                    print('[+]Download finished: %s' % reqTuple[1])
+                    self._ReqFnMapping[reqTuple[0]](self, reqTuple, response)
                 else:
-                    print('[-]Download failed: %s' % twiceTuple[1])
+                    print('[-]Download failed: %s' % reqTuple[1])
             except queue.Empty:
                 timeOutCount += 1
                 print('[?]Time out, Count %d, Thread exits when the timeout counts greater than or equal to %d' %
-                      (timeOutCount, self._timeOutNumberForExit))
+                      (timeOutCount, self._TimeOutNumberForExit))
             except Exception as err:
                 print('[-]Error: %s' % err)
+
+    # req_tup: ('image', <url>, <videoIdent>)
+    def _req_image(self, req_tup, response):
+        if not req_tup[2]:
+            fileName = req_tup[1].split('/')[-1]
+        else:
+            fileName = '%s.%s' % (req_tup[2], req_tup[1].split('.')[-1])
+        self.save_file_by_response(fileName, response)
+
+    _ReqFnMapping['image'] = _req_image
+
+    # req_tup: ('page', <url>)
+    def _req_page(self, req_tup, response):
+        imageURLMatchObj = REGEX_SEARCH_IMAGE.search(response.text)
+        if imageURLMatchObj:
+            videoIdentMatchObj = REGEX_VIDEO_IDENT.search(response.url)
+            videoIdent = videoIdentMatchObj.group() if videoIdentMatchObj else ''
+            newReqTuple = ('image', imageURLMatchObj.group(1), videoIdent)
+            self._urlQueue.put(newReqTuple)
+            print('[+]Put: %s' % str(newReqTuple))
+        else:
+            print('[-]Image URL not found on page %s' % req_tup[1])
+
+    _ReqFnMapping['page'] = _req_page
 
     def make_directory(self):
         os.makedirs(self._rootDir, exist_ok=True)
 
-    def save_file_by_response(self, fileName: str, response: requests.Response):
-        fileName = os.path.join(self._rootDir, fileName)
-        if os.path.exists(fileName):
-            print('[=]File has existed: %s' % fileName)
+    def save_file_by_response(self, filename, response):
+        filename = os.path.join(self._rootDir, filename)
+        if os.path.exists(filename):
+            print('[=]File has existed: %s' % filename)
         else:
-            with open(fileName, 'wb') as binFile:
+            with open(filename, 'wb') as binFile:
                 for chunk in response.iter_content(0xffff):
                     binFile.write(chunk)
 
 
 class ProcedureParsePage:
     def __init__(self, keyword, num_pages, url_queue):
-        self._urlQueue: queue.Queue = url_queue
+        self._urlQueue = url_queue
         self._numberOfPages = num_pages
         self._keyword = keyword
 
@@ -153,7 +173,7 @@ class ProcedureParsePage:
                     successFlag = False
                 else:
                     for i in range(1, min(self._numberOfPages, lastPage) + 1):
-                        url = URL_BASE + _urlencode({'keyword': self._keyword, 'page': str(i)})
+                        url = STRING_URL_BASE + _urlencode({'keyword': self._keyword, 'page': str(i)})
                         print('[+]Page %d downloading...' % i)
                         flag = self.collect_url_in_page(url)
                         if flag:
@@ -175,9 +195,9 @@ class ProcedureParsePage:
             aElems = self._driver.find_elements_by_css_selector('li[class="video matrix"]>a')
             for aElem in aElems:
                 pageURL = aElem.get_attribute('href')
-                twiceTuple = ('page', pageURL)
-                self._urlQueue.put(twiceTuple)
-                print('[+]Put: %s' % str(twiceTuple))
+                reqTuple = ('page', pageURL)
+                self._urlQueue.put(reqTuple)
+                print('[+]Put: %s' % str(reqTuple))
             return True
         except Exception as err:
             print('[-]Error: %s, %s' % (type(err), err))
@@ -185,7 +205,7 @@ class ProcedureParsePage:
 
     def get_last_page(self) -> int:
         try:
-            url = URL_BASE + _urlencode({'keyword': self._keyword, 'page': '1'})
+            url = STRING_URL_BASE + _urlencode({'keyword': self._keyword, 'page': '1'})
             self._driver.get(url)
             buttonElem = self._driver.find_element_by_css_selector('li[class="page-item last"]>button')
             return int(buttonElem.text)
