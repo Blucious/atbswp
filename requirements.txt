@@ -1,0 +1,5 @@
+selenium==3.8.1
+requests==2.18.4
+pyperclip==1.6.0
+chardet==3.0.4
+beautifulsoup4==4.6.0
