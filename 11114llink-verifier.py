@@ -36,8 +36,6 @@ def download(url, params=None, **kwargs):
         response = requests.get(url, params=params, **kwargs)
     except Exception as err:
         print('[-]Error:\nurl: %s\ntype: %s\ndetails: %s' % (url, type(err), err), file=sys.stderr)
-        if response:
-            print('[?]%s', response.headers['Location'])
     return response
 
 
@@ -90,7 +88,7 @@ def main():
     with ThreadPoolExecutor(max_workers=5) as executor:
         futures = [executor.submit(download, url) for url in url_list]
 
-        for future in futures:
+        for future in as_completed(futures):
             response = future.result()
             if response is not None:
                 print('[+]%s - Status Code:%s' % (response.url, response.status_code))
