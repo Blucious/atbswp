@@ -1,7 +1,7 @@
 # coding:utf8
 
-"""Usage:largeFileFind.py [dir] [size]
-example:
+"""Usage:largeFileFind.py <dir> <size>
+Example:
     largeFileFind.py ./spam 0.1g
     largeFileFind.py ./spam 100MB
     largeFileFind.py ./spam 100Mb  # different to 100MB
