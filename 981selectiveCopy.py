@@ -1,7 +1,7 @@
 # coding:utf8
 
-"""Usage:optionalCopy.py [dir] [extensions] [destdir]
-example:
+"""Usage:optionalCopy.py <dir> <extensions> <destdir>
+Example:
     optionalCopy.py ./eggs jpg,pdf ./bacon
     optionalCopy.py ./eggs .jpg,.pdf ./bacon
 """
@@ -40,4 +40,3 @@ if len(sys.argv) == 4:
                 shutil.copy(src, dst)
 else:
     print(__doc__)
-
