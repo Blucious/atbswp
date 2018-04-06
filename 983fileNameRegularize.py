@@ -12,7 +12,7 @@ import os
 import sys
 import collections
 
-prefixPatternTemplate = r'^(%s)((0*?)\d+)(.*)$'
+prefixPatternTemplate = r'^(%s)((0*)\d+)(.*)$'
 
 GROUP_PREFIX = 1
 GROUP_DECIMAL = 2
