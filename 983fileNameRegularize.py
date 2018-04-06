@@ -1,7 +1,7 @@
 # coding:utf8
 
-"""Usage:fileNameRegularize.py [dir] [prefix] [startIndex:optional]
-example:
+"""Usage:fileNameRegularize.py <dir> <prefix> [<startIndex>]
+Example:
     fileNameRegularize.py ./spam spam       # Use the minimum index that exists
     fileNameRegularize.py ./spam spam 001   # Use placeholder
     fileNameRegularize.py ./spam spam 1     # '1' is different to '001'
