@@ -10,7 +10,7 @@ import openpyxl
 
 def get_new_filename(filename):
     twice_tup = os.path.splitext(filename)
-    return time.strftime('_treated%Y%m%d%H%M%S', time.localtime()).join(twice_tup)
+    return time.strftime('_treated%Y%m%d%H%M%S').join(twice_tup)
 
 
 if len(sys.argv) == 2:
