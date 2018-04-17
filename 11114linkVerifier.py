@@ -2,7 +2,7 @@
 
 """Usage:link-verifier.py <pageUrl>
 Example:
-    link-verifier.py https://www.python.org
+    linkVerifier.py https://www.python.org
 """
 
 import re
