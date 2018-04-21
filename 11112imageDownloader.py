@@ -1,6 +1,6 @@
 # coding:utf8
 
-"""imageDownloader.py <keyword> <npages> [options]
+"""imageDownloader.py
 Description:
     download video covers from www.bilibili.com
 
@@ -8,29 +8,47 @@ Example:
     imageDownloader.py python 2
     imageDownloader.py python 2 --max_workers 5 --target-dir ./image
 """
-
 #                                                       |   |
 #                                                     |   | |
-# ProcedureParsePage                        ProcedureDonwloadImage
+# ProcedurePageParser                        ProcedureDownloader
 #    |   |              Queue                       |   | | |...
 #    |   |--<pageURL>-->|   |--<imageURL/pageURL>-->|   | | |
 #    |   |              |   |<------<imageURL>------|   | |
 #    |   |                                          |   |
-#
 
 
 import os
 import sys
 import time
 import queue
+import atexit
+import logging
+import requests
 import threading
 
-import requests
-
 from re import compile as _re_compile
+from urllib.parse import quote as _quote
 from urllib.parse import urlencode as _urlencode
 from selenium import webdriver
 from selenium import common
+
+###############################################################################
+__log__ = logging.getLogger(__name__)
+__log__.setLevel(logging.DEBUG)
+
+f = logging.Formatter('%(relativeCreated)d, %(message)s')
+sh = logging.StreamHandler()
+sh.setFormatter(f)
+fh = logging.FileHandler(filename='11112.log', mode='w', encoding='utf8')
+fh.setFormatter(f)
+
+__log__.addHandler(sh)
+__log__.addHandler(fh)
+del f
+del sh
+del fh
+
+###############################################################################
 
 REGEX_SEARCH_IMAGE = _re_compile(r'<meta data-vue-meta="true" itemprop="image" content="([^"]+)"/>')
 REGEX_VIDEO_IDENT = _re_compile(r'av\d+')
@@ -47,24 +65,24 @@ INT_TIME_OUT = 12
 
 
 class MyThread(threading.Thread):
-    _RES_NONE = object()
+    __resNone = object()
 
-    def __init__(self, cls, args=None, kwargs=None):
-        threading.Thread.__init__(self)
+    def __init__(self, cls, args=None, kwargs=None, daemon=False):
+        threading.Thread.__init__(self, daemon=daemon)
         self.cls = cls
         self.args = args if args else tuple()
         self.kwargs = kwargs if kwargs else dict()
-        self.result = self._RES_NONE
+        self.result = self.__resNone
 
     def get_result(self):
-        if self.result is self._RES_NONE:
+        if self.result is self.__resNone:
             raise RuntimeError('call get_result() before run')
         return self.result
 
     def run(self):
-        print('[+]Thread %d starting at %s' % (self.ident, time.ctime()))
+        __log__.info('[+]Thread %d starting at %s' % (self.ident, time.ctime()))
         self.result = self.cls(*self.args, **self.kwargs)()
-        print('[+]Thread %d finished at %s' % (self.ident, time.ctime()))
+        __log__.info('[+]Thread %d finished at %s' % (self.ident, time.ctime()))
 
 
 def download(url, params=None, **kwargs):
@@ -77,57 +95,50 @@ def download(url, params=None, **kwargs):
         response = requests.get(url, params=params, **kwargs)
         response.raise_for_status()
     except Exception as err:
-        print('[-]Error: %s' % err)
+        __log__.error('[-]Error: %s' % err)
     return response
 
 
-class ProcedureDonwloadImage:
-    _TimeOutNumberForExit = 3
-    _QueueEmptyTimeOut = 7
-    _ReqFnMapping = dict()
+class ProcedureDownloader:
+    __queueEmptyTimeout = 1
+    __reqFnMapping = dict()
 
     def __init__(self, download_dir, url_queue):
         self._urlQueue = url_queue
-        self._rootDir = download_dir
-        # self._threadId = threading.get_ident()
+        self._baseDir = download_dir
 
     def __call__(self):
         self.make_directory()
-        timeOutCount = 0
         while True:
-            # print('[?]id %d' % threading.get_ident(), EVENT_ALL_DONE.is_set(), isTimeOut, self._urlQueue.qsize())
-            if EVENT_ALL_DONE.is_set() and self._urlQueue.empty() or \
-                    timeOutCount >= self._TimeOutNumberForExit:
+            if EVENT_ALL_DONE.is_set() and self._urlQueue.empty():
                 break
 
             try:
-                reqTuple = self._urlQueue.get(True, self._QueueEmptyTimeOut)
-                assert reqTuple[0] in self._ReqFnMapping
+                reqTuple = self._urlQueue.get(True, self.__queueEmptyTimeout)
+                assert reqTuple[0] in self.__reqFnMapping
 
-                print('[+]Get: %s, Remaining count: %d' % (str(reqTuple), self._urlQueue.qsize()))
+                __log__.debug('[+]Get: %s, Remaining count: %d' % (str(reqTuple), self._urlQueue.qsize()))
 
                 response = download(reqTuple[1])
                 if response:
-                    print('[+]Download finished: %s' % reqTuple[1])
-                    self._ReqFnMapping[reqTuple[0]](self, reqTuple, response)
+                    __log__.info('[+]Download finished: %s' % reqTuple[1])
+                    self.__reqFnMapping[reqTuple[0]](self, reqTuple, response)
                 else:
-                    print('[-]Download failed: %s' % reqTuple[1])
+                    __log__.error('[-]Download failed: %s' % reqTuple[1])
             except queue.Empty:
-                timeOutCount += 1
-                print('[?]Time out, Count %d, Thread exits when the timeout counts greater than or equal to %d' %
-                      (timeOutCount, self._TimeOutNumberForExit))
+                pass
             except Exception as err:
-                print('[-]Error: %s' % err)
+                __log__.error('[-]Error: %s' % err)
 
     # req_tup: ('image', <url>, <videoIdent>)
     def _req_image(self, req_tup, response):
         if not req_tup[2]:
-            fileName = req_tup[1].split('/')[-1]
+            filename = req_tup[1].split('/')[-1]
         else:
-            fileName = '%s.%s' % (req_tup[2], req_tup[1].split('.')[-1])
-        self.save_file_by_response(fileName, response)
+            filename = '%s.%s' % (req_tup[2], req_tup[1].split('.')[-1])
+        self.save_file_by_response(filename, response)
 
-    _ReqFnMapping['image'] = _req_image
+    __reqFnMapping['image'] = _req_image
 
     # req_tup: ('page', <url>)
     def _req_page(self, req_tup, response):
@@ -137,59 +148,70 @@ class ProcedureDonwloadImage:
             videoIdent = videoIdentMatchObj.group() if videoIdentMatchObj else ''
             newReqTuple = ('image', imageURLMatchObj.group(1), videoIdent)
             self._urlQueue.put(newReqTuple)
-            print('[+]Put: %s' % str(newReqTuple))
+            __log__.info('[+]Put: %s' % str(newReqTuple))
         else:
-            print('[-]Image URL not found on page %s' % req_tup[1])
+            __log__.warning('[-]Image URL not found on page %s' % req_tup[1])
 
-    _ReqFnMapping['page'] = _req_page
+    __reqFnMapping['page'] = _req_page
 
     def make_directory(self):
-        os.makedirs(self._rootDir, exist_ok=True)
+        os.makedirs(self._baseDir, exist_ok=True)
 
     def save_file_by_response(self, filename, response):
-        filename = os.path.join(self._rootDir, filename)
+        filename = os.path.join(self._baseDir, filename)
         if os.path.exists(filename):
-            print('[=]File has existed: %s' % filename)
+            __log__.info('[=]File has existed: %s' % filename)
         else:
             with open(filename, 'wb') as binFile:
                 for chunk in response.iter_content(0xffff):
                     binFile.write(chunk)
 
 
-class ProcedureParsePage:
+class ProcedurePageParser:
+    __instanceList = []
+    __cntLock = threading.Lock()
+
     def __init__(self, keyword, num_pages, url_queue):
+        with self.__cntLock:
+            if len(self.__instanceList) >= 1:
+                raise RuntimeError('not support to run larger than 1 instance of ProcedurePageParser at the same time')
+            self.__instanceList.append(self)
+        
         self._urlQueue = url_queue
-        self._numberOfPages = num_pages
-        self._keyword = keyword
+        self._numPages = int(num_pages)
+        self._keyword = str(keyword)
+        self._keywordQuoted = _quote(self._keyword)
 
     def __call__(self):
-        successFlag = True
+        succeedFlag = True
         try:
             self._driver = webdriver.Chrome()
             self._driver.implicitly_wait(4)
             try:
-                lastPage = self.get_last_page()
-                if lastPage == -1:
-                    successFlag = False
+                lastPageIndex = self.get_last_page_index()
+                if lastPageIndex == -1:
+                    succeedFlag = False
                 else:
-                    for i in range(1, min(self._numberOfPages, lastPage) + 1):
-                        url = STRING_URL_BASE + _urlencode({'keyword': self._keyword, 'page': str(i)})
-                        print('[+]Page %d downloading...' % i)
-                        flag = self.collect_url_in_page(url)
+                    for i in range(1, min(self._numPages, lastPageIndex) + 1):
+                        url = STRING_URL_BASE + _urlencode({'keyword': self._keywordQuoted, 'page': str(i)},
+                                                           quote_via=_quote)
+                        __log__.info('[+]Page %d downloading...' % i)
+                        flag = self.collect_url_on_page(url)
                         if flag:
-                            print('[+]Page %d download completed' % i)
+                            __log__.info('[+]Page %d download completed' % i)
                         else:
-                            print('[-]Page %d download failed' % i)
+                            __log__.error('[-]Page %d download failed' % i)
             finally:
                 self._driver.quit()
         except common.exceptions.WebDriverException as err:
-            print('[-]Error: %s' % err)
+            __log__.error('[-]Error: %s' % err)
         finally:
             EVENT_ALL_DONE.set()
+            with self.__cntLock:
+                self.__instanceList.remove(self)
+        return succeedFlag
 
-        return successFlag
-
-    def collect_url_in_page(self, url) -> bool:
+    def collect_url_on_page(self, url) -> bool:
         try:
             self._driver.get(url)
             aElems = self._driver.find_elements_by_css_selector('li[class="video matrix"]>a')
@@ -197,69 +219,93 @@ class ProcedureParsePage:
                 pageURL = aElem.get_attribute('href')
                 reqTuple = ('page', pageURL)
                 self._urlQueue.put(reqTuple)
-                print('[+]Put: %s' % str(reqTuple))
+                __log__.info('[+]Put: %s' % str(reqTuple))
             return True
         except Exception as err:
-            print('[-]Error: %s, %s' % (type(err), err))
+            __log__.error('[-]Error: %s, %s' % (type(err), err))
         return False
 
-    def get_last_page(self) -> int:
+    def get_last_page_index(self) -> int:
+        # State 1:
+        # [1] [2] [3] [4] [5] [6] [7] ... [xx] [xxx]
+        # State 2:
+        #       [1] [2] [3] [4] [5] [6] [xxx]
+        # State 3:
+        #              xxxxxxxxxxxxxxxxxx
+
         try:
-            url = STRING_URL_BASE + _urlencode({'keyword': self._keyword, 'page': '1'})
+            url = STRING_URL_BASE + 'keyword=%s&page=1' % self._keywordQuoted
             self._driver.get(url)
-            buttonElem = self._driver.find_element_by_css_selector('li[class="page-item last"]>button')
-            return int(buttonElem.text)
-        except common.exceptions.NoSuchElementException:
-            print('[-]No result: %s' % self._keyword)
+
+            buttonElems = self._driver.find_elements_by_class_name('pagination-btn')
+            if buttonElems:  # exist the page turning button
+                numbers = [int(buttonElem.text) for buttonElem in buttonElems
+                           if buttonElem.text.isdigit()]
+                return max(numbers)
+
+            liElems = self._driver.find_elements_by_css_selector('li[class="video matrix"]')
+            if len(liElems) > 5:  # all videos - recommend videos > 5
+                return 1
+
         except Exception as err:
-            print('[-]Error: %s, %s' % (type(err), err))
+            __log__.error('[-]Error: %s, %s' % (type(err), err))
+        __log__.info('[-]No result: %s' % self._keyword)
         return -1
 
 
 def main():
-    import optparse
+    import argparse
+    parser = argparse.ArgumentParser(description='download video covers from'
+                                                 ' www.bilibili.com')
+    parser.add_argument('k', type=str, help='keyword for search')
+    parser.add_argument('n', type=int, help='number of pages')
+    parser.add_argument('-m', '--max-workers', type=int, default=4,
+                        help='the number of procedures to download page and image'
+                             ' (default 4)')
+    parser.add_argument('-t', '--target-dir', type=str, default='img',
+                        help='target directory (default ./img)')
 
-    parser = optparse.OptionParser(usage=__doc__)
-    parser.add_option('-m', '--max-workers', dest='max_workers', type='int', default=3,
-                      help='The number of procedures to download page & image [default: %default]')
-    parser.add_option('-t', '--target-dir', dest='target_dir', type='string', default='img',
-                      help='Target directory [default: %default]')
-    opts, args = parser.parse_args()
+    args = parser.parse_args()
 
-    if len(args) != 2:
-        parser.error('incorrect number of arguments')
+    if os.path.exists(args.target_dir) and not os.path.isdir(args.target_dir):
+        parser.error('file exists %s' % args.target_dir)
         return 2
-    # --- arg: <keyword> ---
-    keyword = args[0]
-    # --- arg: <numOfPages> ---
-    if not args[1].isdigit():
-        parser.error("invalid number '%s'" % args[1])
+    if args.n < 1:
+        parser.error('invalid number %d' % args.n)
         return 2
-    numOfPages = int(args[1])
-    # --- option: --max-workers ---
-    maxWorkers = min(max(opts.max_workers, 1), 20)
-    # --- option: --target-dir ---
+
+    args.max_workers = min(max(args.max_workers, 1), 20)
+
     table = str.maketrans({c: '_' for c in r'\/:*?"<>|'})
-    targetDir = os.path.join(opts.target_dir.translate(table),
-                             keyword.translate(table))
+    args.target_dir = os.path.join(args.target_dir.translate(table),
+                                   args.k.translate(table))
 
-    # --- Process ---
+    ###############################################################################
     urlQueue = queue.Queue()
-    threads = list()
+    subThreads = list()
+    try:
+        subThreads.append(MyThread(cls=ProcedurePageParser,
+                                   args=(args.k, args.n, urlQueue)))
+        for i in range(args.max_workers):
+            subThreads.append(MyThread(cls=ProcedureDownloader,
+                                       args=(args.target_dir, urlQueue)))
 
-    startTime = time.time()
-    threads.append(MyThread(cls=ProcedureParsePage, args=(keyword, numOfPages, urlQueue)))
-    for i in range(maxWorkers):
-        threads.append(MyThread(cls=ProcedureDonwloadImage, args=(targetDir, urlQueue)))
+        for i in range(len(subThreads)):
+            subThreads[i].start()
 
-    for i in range(len(threads)):
-        threads[i].start()
-
-    for i in range(len(threads)):
-        threads[i].join()
-
-    print('[+]all DONE, Costs: %f' % (time.time() - startTime))
+        for i in range(len(subThreads)):
+            while subThreads[i].is_alive():
+                time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        EVENT_ALL_DONE.set()
     return None
+
+
+@atexit.register
+def _atexit():
+    __log__.info('[+]All done')
 
 
 if __name__ == '__main__':
